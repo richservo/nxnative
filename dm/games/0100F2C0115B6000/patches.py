@@ -184,6 +184,17 @@ def screen_shape(ctx):
     # The field of view, as in Breath of the Wild: sead::PerspectiveProjection (fovy +0xa0, sin / cos / tan of half of it +0xa4 / +0xa8 / +0xac, aspect +0xb0) takes a fovy of
     # 2 atan(tan(fovy / 2) x k) for a view of the screen's ratio, so 16:9's sides stay in view with more above and below. The same code as Breath of the Wild's at setFovy_
     # (1.4.3 main+0x27d53f8), the constructor (+0xc02694) and set() (+0xd4275c); the body is Breath of the Wild's (its patches.py fov_stub), tanf / atanf through 1.4.3's PLT
+    # The scene cameras' aspect: unlike Breath of the Wild, whose projections took the view's ratio, two camera builders (1.4.3 main+0x9a1bc, +0x218eeb8) load a 16:9
+    # constant ([main+0x2d02534]) as the aspect for the sead::PerspectiveProjection constructor and set(), so the taller view was drawn with a 16:9 projection (stretched
+    # vertically; iPhone Duo, first trial). They take the screen's ratio (state +0x58) instead while it is on; the fovy stubs below then widen them. x16 is free up to the bl
+    def cam_aspect(site):
+        fs_site(site, '033545bd')   # ldr s3,[x8,#0x534]
+        start = here(); emit(0xbd453503); emit(ADRP(16, here(), FS_STATE_OFF))
+        for w in (0xb9405a10, 0x34000050, 0x1e270203):   # ldr w16,[x16,#0x58]; cbz w16,+8 (off); fmov s3,w16
+            emit(w)
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], 'scene camera aspect: the screen\'s ratio instead of 16:9 while the screen shape is on')
+    cam_aspect(0x9a1bc); cam_aspect(0x218eeb8)
     TANF, ATANF = 0x2bb7470, 0x2bb7480
     FOV_BODY = (None, 0xbd405a01, 0x1e202028, 0x540003e0, 'ratio', 0x1e213842, 0x1e20c042, 0xbd406203, 0x1e232040, 0x5400032a,
                 0xb940a269, 0x9104020a, 0x5280080b, 0xb840454c, 0x6b09019f, 0x54000260, 0x7100056b, 0x54ffff81,
