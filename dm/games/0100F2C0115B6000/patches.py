@@ -181,6 +181,29 @@ def screen_shape(ctx):
             (0x2880b3c, 24, LAY, '1280x720'),
             (0x2880e34, 8, LAY, '1280x720'))):
         taller_bit(site, reg, bit, load, f'screen shape site {bit}: {why} → the host\'s height')
+    # The layout space as floats (1280.0, 720.0): the UI's own size, which Breath of the Wild makes taller (1280x896) so text and pictures are laid out for the taller
+    # screen and nothing stretches. With only the HUD camera squeezed (test build 7) the text kept its shape but pictures did not (they size from these). Each takes the
+    # host's float layout height (state +0x50) while its bit of +0x54 is set; bits 15-21 the (1280.0, 720.0) pairs (movk xN,#0x4434,lsl #48 → its high half), 22-30 the
+    # 720.0 floats (mov wN,#0x44340000; the last four share bit 30). Bit 31 is the HUD band below (the text camera's squeeze), off when the layout itself is taller
+    def float_bit(site, orig, apply, bit, why):
+        fs_site(site, struct.pack('<I', orig).hex())
+        start = here(); emit(orig)
+        emit(ADRP(16, here(), FS_STATE_OFF))
+        emit(0xb9405610); emit(0x36000000 | bit << 19 | 5 << 5 | 16)   # ldr w16,[x16,#0x54]; tbz w16,#bit,back (+5)
+        emit(ADRP(16, here(), FS_STATE_OFF))
+        for w in (0xb9405210, 0x34000050, apply):   # ldr w16,[x16,#0x50] (the layout height's float bits); cbz w16,+8; apply
+            emit(w)
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], why)
+    for bit, (site, reg, why) in enumerate((
+            (0x7a6d60, 9, '(1280.0, 720.0) with its inverse (a screen-size constant)'), (0xb84a9c, 14, '(1280.0, 720.0)'),
+            (0xbdb6a0, 8, '(1280.0, 720.0) passed at graphics init'), (0xd42398, 8, '(1280.0, 720.0) beside the projections'),
+            (0x22dc2b0, 8, '(1280.0, 720.0) viewport of a 16:9 camera'), (0x2880b40, 25, '(1280.0, 720.0) with 1280x720 (an object)'),
+            (0x2b43554, 8, '(1280.0, 720.0) twice in an object')), start=15):
+        float_bit(site, 0xf2e88680 | reg, 0xb3607e00 | reg, bit, f'screen shape site {bit}: {why} → the layout height')
+    for bit, (site, reg) in ((22, (0x89cac, 8)), (23, (0x4ea988, 8)), (24, (0x684c48, 8)), (25, (0x778378, 9)), (26, (0x89f1dc, 8)), (27, (0x18fdcb0, 8)),
+                             (28, (0x1df2ce8, 9)), (29, (0x22dc2f0, 8)), (30, (0x23c2c00, 8)), (30, (0x23ceb08, 8)), (30, (0x28ff988, 8)), (30, (0x2b2a1fc, 8))):
+        float_bit(site, 0x52a88680 | reg, 0x2a1003e0 | reg, bit, f'screen shape site {bit}: 720.0 → the layout height')
     # The field of view, as in Breath of the Wild: sead::PerspectiveProjection (fovy +0xa0, sin / cos / tan of half of it +0xa4 / +0xa8 / +0xac, aspect +0xb0) takes a fovy of
     # 2 atan(tan(fovy / 2) x k) for a view of the screen's ratio, so 16:9's sides stay in view with more above and below. The same code as Breath of the Wild's at setFovy_
     # (1.4.3 main+0x27d53f8), the constructor (+0xc02694) and set() (+0xd4275c); the body is Breath of the Wild's (its patches.py fov_stub), tanf / atanf through 1.4.3's PLT
@@ -265,6 +288,7 @@ def screen_shape(ctx):
             code.append(w)
         put(orig); put('adrp')
         for w in cnt(0x120): put(w)
+        put(0xb9405611); put(0x36f80011, 'back')                                       # ldr w17,[x16,#0x54]; tbz w17,#31,back (bit 31 of the site mask)
         put(0xb9405a11); put(0x34000011, 'back')                                       # the screen's ratio (+0x58), 0: back
         put(0x1e260010); put(0x52a7f011); put(0x4b110210); put(0x35000010, 'back')      # near == 1.0
         put(0x1e260030); put(0x52a8c391); put(0x72880011); put(0x4b110210); put(0x35000010, 'back')   # far == 10000.0
@@ -282,6 +306,33 @@ def screen_shape(ctx):
         fs_put(site, [B(site, start)], 'screen shape: the HUD camera (16:9, near 1, far 10000) drawn as a 16:9 band in the middle of the taller picture')
     for site, base in ((0x990fc, 21), (0xc475c, 19), (0x64aeb4, 20), (0x6dff00, 8)):
         hud_band(site, base)
+    # The 2D layer (text and pictures alike) draws through sead::OrthoProjection: its extents come from the layout's 1280x720 viewport (setByViewport, 1.4.3 main+0x27d578c:
+    # top +0xa0, bottom +0xa4, left +0xa8, right +0xac) and doUpdateMatrix (main+0x27d57e8, a leaf) maps them over the whole picture, so on the taller screen everything 2D
+    # was stretched vertically (iPhone Duo screenshots: the title's emblem an oval, the hearts at the very top edge). For an ortho projection of about 16:9 (right - left over
+    # top - bottom), the half height (s1 at main+0x27d583c, which m11 and m13 divide by) is multiplied by k = (16/9) / ratio (state +0x5c): the 2D layer is drawn as a 16:9
+    # band in the middle of the picture, nothing stretched. s5-s7 are dead there; x16 / x17 free (a leaf). Counts at state +0x158 (the log's eleventh site)
+    site = 0x27d583c
+    fs_site(site, '4108211e')   # fmul s1,s2,s1 (s1 = (top - bottom) / 2; s2 = top - bottom)
+    code, fix = [], {}
+    def put(w, to=None):
+        if to: fix[len(code)] = (w, to)
+        code.append(w)
+    put(0x1e210841); put('adrp')
+    for w in cnt(0x158): put(w)
+    put(0xb9405a11); put(0x34000011, 'back')                                          # the screen's ratio (+0x58), 0: back
+    put(0x2d551805); put(0x1e2538c5); put(0x1e2218a5)                                 # ldp s5,s6,[x0,#0xa8]; fsub s5,s6,s5 (right - left); fdiv s5,s5,s2 (its aspect)
+    put(0x1e2600b1); put(0x52800010 | 0x4e39 << 5); put(0x72a00010 | 0x3fe2 << 5)     # w17 = the aspect's bits; w16 = bits(16/9 - 0.0098)
+    put(0x4b100231); put(0x53127e31); put(0x35000011, 'back')                          # not near 16:9: back
+    put('adrp'); put(0xbd405e05); put(0x1e250821)                                      # s5 = k; s1 x= k (the half height)
+    for w in cnt(0x124): put(w)
+    labels = {'back': len(code)}
+    start = here()
+    for i, w in enumerate(code):
+        if w == 'adrp': emit(ADRP(16, here(), FS_STATE_OFF)); continue
+        if i in fix: w = fix[i][0] | (labels[fix[i][1]] - i) << 5
+        emit(w)
+    emit(B(here(), site + 4))
+    fs_put(site, [B(site, start)], 'screen shape: a 16:9 ortho projection (the 2D layer) drawn as a 16:9 band in the middle of the taller picture')
     # The HUD camera's matrix (doUpdateMatrix, 1.4.3 main+0x27d5438): Breath of the Wild's stub, the same leaf code
     fs_site(0x27d5444, '0188552d')
     start = here(); emit(0x2d558801); emit(ADRP(16, here(), FS_STATE_OFF))   # ldp s1,s2,[x0,#0xac] (tan, aspect)
