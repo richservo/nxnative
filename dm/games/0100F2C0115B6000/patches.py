@@ -254,7 +254,8 @@ def screen_shape(ctx):
     # The HUD camera's matrix (doUpdateMatrix, 1.4.3 main+0x27d5438): Breath of the Wild's stub, the same leaf code
     fs_site(0x27d5444, '0188552d')
     start = here(); emit(0x2d558801); emit(ADRP(16, here(), FS_STATE_OFF))   # ldp s1,s2,[x0,#0xac] (tan, aspect)
-    for w in (0xbd405a10, 0x1e202208, 0x54000320, 0xbd407611, 0x1e313851, 0x1e20c231, 0xbd407a12, 0x1e322220, 0x5400026a,   # ratio on; aspect 16:9
+    for w in (0xb9412209, 0x11000529, 0xb9012209,   # matrices built += 1 (state +0x120, logged as "projections built"; w9 is free in this leaf)
+              0xbd405a10, 0x1e202208, 0x54000320, 0xbd407611, 0x1e313851, 0x1e20c231, 0xbd407a12, 0x1e322220, 0x5400026a,   # ratio on; aspect 16:9
               0x2d534811, 0x1e2e1013, 0x1e332220, 0x540001e1, 0xbd407e13, 0x1e332240, 0x54000181,                          # near 1, far 10000
               0x1e204202,                                                                                                  # aspect = ratio
               0xb940a009, 0x9104020a, 0x5280080b, 0xb840454c, 0x6b09019f, 0x540000a0, 0x7100056b, 0x54ffff81,             # fovy widened already: done

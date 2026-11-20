@@ -2105,6 +2105,7 @@ static void power_line(uint64_t frame) {
         if (dm_fps_state) { uint32_t hc, hg; memcpy(&hc, dm_fps_state + 0x170, 4); memcpy(&hg, dm_fps_state + 0x174, 4);   // patches.py heap_retry
             static uint32_t phc, phg; if (hc != phc || hg != phg) { LOG("[nvn] full model heap up to frame %llu: %u CPU buffers made in a parent heap, %u GPU blocks made in a parent or the default heap (so far)", frame, hc, hg); phc = hc; phg = hg; } }
         if (dm_fps_state) { float wc, wo; uint32_t wm, ww; memcpy(&wc, dm_fps_state + 0x110, 4);   // Wide view's camera stub (Ocarina's patches.py wide_view): matrices built, widened, last other ratio
+            if (!(wc > 0)) memcpy(&wc, dm_fps_state + 0x58, 4);   // or the screen shape's ratio (Tears of the Kingdom's patches.py screen_shape counts at the same places)
             if (wc > 0) { memcpy(&wm, dm_fps_state + 0x120, 4); memcpy(&ww, dm_fps_state + 0x124, 4); memcpy(&wo, dm_fps_state + 0x128, 4);
                 uint32_t sc[11]; memcpy(sc, dm_fps_state + 0x130, sizeof sc);   // passes of each aspect store site (patches.py wide_view, in its order)
                 LOG("[nvn] wide view camera up to frame %llu: %u projections built, %u widened to %.4f, last other ratio %.4f; aspect sets per site %u %u %u %u %u %u %u %u %u %u %u", frame, wm, ww, wc, wo,
