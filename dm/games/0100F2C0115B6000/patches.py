@@ -195,6 +195,21 @@ def screen_shape(ctx):
         emit(B(here(), site + 4))
         fs_put(site, [B(site, start)], 'scene camera aspect: the screen\'s ratio instead of 16:9 while the screen shape is on')
     cam_aspect(0x9a1bc); cam_aspect(0x218eeb8)
+    # Projections whose aspect is copied from a camera's parameters (still 16:9 after the builders above; iPhone Duo, second trial): the view update (1.4.3 main+0xd4fdc,
+    # after setFovy_; [params+0x218]) and two more (+0x628c7c, +0xb43468). Where the copied value is exactly 16:9 and the screen shape is on, the screen's ratio is stored
+    # instead (as bits, no FP register changes); any other aspect (shadow maps, cube maps, a viewport's own ratio) is stored as it is. x16 / x17 are free at the three
+    def copied_aspect(site, base):
+        orig = 0xbd00b000 | base << 5   # str s0,[xB,#0xb0]
+        fs_site(site, struct.pack('<I', orig).hex())
+        start = here()
+        for w in (0x1e260010, 0x5291c731, 0x72a7fc71, 0x6b11021f, 0x540000c1):   # fmov w16,s0; w17 = 16/9 (0x3fe38e39); cmp w16,w17; b.ne the original (+6)
+            emit(w)
+        emit(ADRP(16, here(), FS_STATE_OFF))
+        for w in (0xb9405a10, 0x34000070, 0xb900b010 | base << 5):   # ldr w16,[x16,#0x58]; cbz w16,the original (+3); str w16,[xB,#0xb0] (the screen's ratio)
+            emit(w)
+        emit(B(here(), site + 4)); emit(orig); emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], 'projection aspect copied from camera parameters: 16:9 becomes the screen\'s ratio while the screen shape is on')
+    copied_aspect(0xd4fdc, 24); copied_aspect(0x628c7c, 20); copied_aspect(0xb43468, 23)
     TANF, ATANF = 0x2bb7470, 0x2bb7480
     FOV_BODY = (None, 0xbd405a01, 0x1e202028, 0x540003e0, 'ratio', 0x1e213842, 0x1e20c042, 0xbd406203, 0x1e232040, 0x5400032a,
                 0xb940a269, 0x9104020a, 0x5280080b, 0xb840454c, 0x6b09019f, 0x54000260, 0x7100056b, 0x54ffff81,
