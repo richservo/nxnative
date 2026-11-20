@@ -221,6 +221,24 @@ def screen_shape(ctx):
     # The scene cameras' aspect: unlike Breath of the Wild, whose projections took the view's ratio, two camera builders (1.4.3 main+0x9a1bc, +0x218eeb8) load a 16:9
     # constant ([main+0x2d02534]) as the aspect for the sead::PerspectiveProjection constructor and set(), so the taller view was drawn with a 16:9 projection (stretched
     # vertically; iPhone Duo, first trial). They take the screen's ratio (state +0x58) instead while it is on; the fovy stubs below then widen them. x16 is free up to the bl
+    # Trials (DM_SCREEN_TRIAL bits 1-18, state +0x64): the 2D layer's matrix is an ortho of 1920x1080 (m00 2/1920, m11 2/1080, m22 -2/300; the title screen's uniform blocks,
+    # Mac headless dump), so its 1080 comes from a float constant. Each 1080.0 / 540.0 here takes the output height / its half (state +0x68 / +0x6c, floats) while its bit is set
+    def trial_float(site, kind, reg, bit, half):
+        hi = 0x4487 if not half else 0x4407   # 1080.0 / 540.0
+        orig = (0x52a00000 | hi << 5 | reg) if kind == 'w' else (0xf2e00000 | hi << 5 | reg)
+        apply = (0x2a1003e0 | reg) if kind == 'w' else (0xb3607e00 | reg)   # mov wN,w16 / bfi xN,x16,#32,#32
+        fs_site(site, struct.pack('<I', orig).hex())
+        start = here(); emit(orig); emit(ADRP(16, here(), FS_STATE_OFF))
+        emit(0xb9406610); emit(0x36000000 | (bit & 31) << 19 | 5 << 5 | 16)   # ldr w16,[x16,#0x64]; tbz w16,#bit,back (+5)
+        emit(ADRP(16, here(), FS_STATE_OFF))
+        for w in (0xb9406e10 if half else 0xb9406a10, 0x34000050, apply): emit(w)   # ldr w16,[x16,#0x6c / 0x68]; cbz; apply
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], f'screen shape trial {bit}: {"540.0" if half else "1080.0"} → the output height{" / 2" if half else ""}')
+    for bit, (site, kind, reg, half) in enumerate((
+            (0xa7578, 'w', 8, 0), (0x33df18, 'w', 9, 0), (0x6df8c4, 'w', 8, 0), (0x81a924, 'w', 8, 0), (0xc711fc, 'w', 9, 0), (0x20d916c, 'w', 8, 0),
+            (0x21464f8, 'w', 8, 0), (0xedff04, 'x', 26, 0), (0x6dfd00, 'w', 8, 1), (0x735b34, 'w', 10, 1), (0x736340, 'w', 8, 1), (0x1f87210, 'w', 8, 1),
+            (0x20f6f94, 'w', 8, 1), (0x20f9e10, 'w', 8, 1), (0x20fa334, 'w', 8, 1), (0x20fc790, 'w', 8, 1), (0x20ff16c, 'w', 8, 1), (0x2162b6c, 'w', 10, 1)), start=1):
+        trial_float(site, kind, reg, bit, half)
     def cam_aspect(site):
         fs_site(site, '033545bd')   # ldr s3,[x8,#0x534]
         start = here(); emit(0xbd453503); emit(ADRP(16, here(), FS_STATE_OFF))
@@ -300,14 +318,16 @@ def screen_shape(ctx):
         put(orig); put('adrp')
         for w in cnt(0x120): put(w)
         put(0xb9405611); put(0x36f80011, 'back')                                       # ldr w17,[x16,#0x54]; tbz w17,#31,back (bit 31 of the site mask)
+        put(0xb9406611); put(0x37000011, 'aspect')                                     # ldr w17,[x16,#0x64]; tbnz w17,#0 (DM_SCREEN_TRIAL bit 0): any near / far
         put(0xb9405a11); put(0x34000011, 'back')                                       # the screen's ratio (+0x58), 0: back
         put(0x1e260010); put(0x52a7f011); put(0x4b110210); put(0x35000010, 'back')      # near == 1.0
         put(0x1e260030); put(0x52a8c391); put(0x72880011); put(0x4b110210); put(0x35000010, 'back')   # far == 10000.0
+        aspect_at = len(code)
         put(0x1e260091); put(0x52800010 | 0x4e39 << 5); put(0x72a00010 | 0x3fe2 << 5)  # w17 = aspect's bits; w16 = bits(16/9 - 0.0098)
         put(0x4b100231); put(0x53127e31); put(0x35000011, 'back')                       # not near 16:9: back
         put('adrp'); put(0xbd405e04); put(0x1e240863); put(0xbd405a04)                  # s4 = k; tan x= k; s4 = the screen's ratio
         for w in cnt(0x124): put(w)
-        labels = {'back': len(code)}
+        labels = {'back': len(code), 'aspect': aspect_at}
         start = here()
         for i, w in enumerate(code):
             if w == 'adrp': emit(ADRP(16, here(), FS_STATE_OFF)); continue
@@ -372,6 +392,25 @@ def screen_shape(ctx):
         fs_put(site, [B(site, start)], 'screen shape: an inlined 16:9 ortho projection (the 2D layer) drawn as a 16:9 band in the middle')
     for site, base, m in ((0x98a18, 21, 4), (0xc4944, 19, 4), (0x64b280, 20, 7), (0x6dfe0c, 8, 4)):
         ortho_band(site, base, m)
+    # The 2D layer's own matrix: the UI renderer (1.4.3 main+0x10d29f0) copies a stored 4x4 (its object + 0x10) into each draw's uniform block through the leaf at
+    # main+0x10cc93c (ldp q0..q3; stp q0, q1, [x1]; stp q2, q3, [x1, #0x20]). |m11| / m00: the text is drawn into small targets and composited with the flipped matrix (m11 < 0). Found with DM_PROBE_WATCH on the title screen's uniform block (Mac, heap + 0x49a16410): an ortho
+    # of 1920x1080 (m00 2/1920, m11 2/1080), drawn over the whole taller picture. In the copy, a matrix whose m11 / m00 is 16:9 has row 1 divided by k: the 2D layer is drawn
+    # as a 16:9 band in the middle, nothing stretched; the stored matrix stays. Assembled with clang (v4-v7, x16, x17 free in the leaf). Counts at state +0x124
+    UI_BAND = (0x5e040404, 0x5e0c0425, 0x1e2418a6, 0x1e20c0c6, 0x1e2600d1, 0x5289c730, 0x72a7fc50, 0x4b100231, 0x53127e31, 0x35000171, 'adrp',
+               0xb9405a11, 0x34000111, 0xbd405e06, 0x1e2e1007, 0x1e2618e6, 0x4f869021, 0xb9412611, 0x11000631, 0xb9012611, 0xad000420, 'back')
+    # The text is drawn into small targets and composited with the flipped matrix times the quad's own (main+0x10b7be0 multiplies them and stores the product at
+    # +0x10b7cb0): at main+0x10b7c4c, before the multiply, v0-v3 hold the flipped 16:9 ortho; its row 1 scaled there carries through the product (v4-v7 are written after)
+    def ui_band(site, orig, why):
+        fs_site(site, struct.pack('<I', orig).hex())
+        start = here()
+        for w in UI_BAND:
+            if w == 'adrp': emit(ADRP(16, here(), FS_STATE_OFF))
+            elif w == 'back': emit(B(here(), site + 4))
+            elif w == 0xad000420: emit(orig)   # the original instruction
+            else: emit(w)
+        fs_put(site, [B(site, start)], why)
+    ui_band(0x10cc944, 0xad000420, 'screen shape: the 2D layer\'s 16:9 ortho matrix copied as a 16:9 band in the middle of the taller picture')
+    ui_band(0x10b7c4c, 0xf9401069, 'screen shape: the text composites\' 16:9 ortho (before the quad\'s matrix) as a 16:9 band in the middle')
     # The HUD camera's matrix (doUpdateMatrix, 1.4.3 main+0x27d5438): Breath of the Wild's stub, the same leaf code
     fs_site(0x27d5444, '0188552d')
     start = here(); emit(0x2d558801); emit(ADRP(16, here(), FS_STATE_OFF))   # ldp s1,s2,[x0,#0xac] (tan, aspect)

@@ -409,6 +409,11 @@ void dm_fps_state_apply(void) {
             const char *ms = getenv("DM_SCREEN_ASPECT_SITES"); uint32_t mask = ms ? (uint32_t)strtoul(ms, NULL, 0) : 0xffffffffu;   // the stubs of the game's own conversions, one bit each (+0x54)
             memcpy(dm_fps_state + 0x54, &mask, 4);
             if (ms) LOG("%s: screen shape: conversion sites %#x (DM_SCREEN_ASPECT_SITES)", g_fps_mod, mask);
+            const char *tr = getenv("DM_SCREEN_TRIAL"); uint32_t trial = tr ? (uint32_t)strtoul(tr, NULL, 0) : 0;   // trial switches of a stub in bring-up (+0x64; Tears of the Kingdom's patches.py)
+            memcpy(dm_fps_state + 0x64, &trial, 4);
+            if (tr) LOG("%s: screen shape: trial switches %#x (DM_SCREEN_TRIAL)", g_fps_mod, trial);
+            float ohf = (float)oh, ohh = (float)oh / 2;   // the output height and its half as floats (+0x68, +0x6c), for stubs that replace a 1080.0 / 540.0 constant
+            memcpy(dm_fps_state + 0x68, &ohf, 4); memcpy(dm_fps_state + 0x6c, &ohh, 4);
             // The field of view: views of the screen's ratio (the scene, the HUD's camera) keep 16:9's sides and show more above and below (patches.py's sead::PerspectiveProjection stubs)
             float r = 1920.0f / (float)oh, k = (16.0f / 9.0f) / r, tol = 0.01f;
             const char *fo = getenv("DM_SCREEN_FOV"); if (fo && !strcmp(fo, "off")) tol = -1.0f;   // trials: the scene keeps the game's vertical angle (no view matches); the HUD camera still widens
