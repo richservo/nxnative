@@ -142,6 +142,77 @@ def matched_frame_step(ctx):
     parts = [o.get(k) for k in ('game step reader 1', 'game step reader 2', 'menu fade', 'swapchain argument', 'view render size')]
     if None in parts: return
     stub(ctx, ctx.base, *parts)
+    if ctx.base == 0x2db174: screen_shape(ctx)   # 1.4.3's own addresses (its frame-step function there)
+
+def screen_shape(ctx):
+    """Screen shape (DM_SCREEN_ASPECT, Breath of the Wild 1.9.0's patches.py ported to 1.4.3): a screen taller than 16:9 (the iPhone Duo's, about 1.43:1) gets a picture of its
+    own shape. State +0x48 u32 output height, +0x4c u32 layout height, +0x50 float layout height, +0x54 u32 site mask (DM_SCREEN_ASPECT_SITES), +0x58 float screen ratio
+    (0 = off), +0x5c float k = (16/9) / ratio, +0x60 float tolerance, +0x74..+0x7c the HUD camera's projection, +0xfc / +0x100 the last 64 widened fovys (loader.c).
+    Work in progress: the camera is ported; which of the size sites is the screen's own size is being found site by site with the mask (a site is off while its bit is 0)"""
+    here, emit, fs_site, fs_put, FS_STATE_OFF = ctx.here, ctx.emit, ctx.site, ctx.put, ctx.state
+    # The game's 1920x1080 and 1280x720 pairs (movk xN,#1080 or #720,lsl #32): each takes the host's height while its bit of state +0x54 is set and the host set one.
+    # x16 is free at every site (checked: written or unused before the next call or return; 1.4.3 main+0x8c81f4 reads it and is left out)
+    OUT, LAY = 0xb9404a10, 0xb9404e10   # ldr w16,[x16,#0x48] / #0x4c
+    def taller_bit(site, reg, bit, load, why):
+        orig = 0xf2c00000 | (0x438 if load == OUT else 0x2d0) << 5 | reg
+        fs_site(site, struct.pack('<I', orig).hex())
+        start = here(); emit(orig)
+        emit(ADRP(16, here(), FS_STATE_OFF))
+        emit(0xb9405610); emit(0x36000000 | bit << 19 | 5 << 5 | 16)   # ldr w16,[x16,#0x54]; tbz w16,#bit,back (+5)
+        emit(ADRP(16, here(), FS_STATE_OFF))
+        for w in (load, 0x34000050, 0xb3607e00 | reg):   # ldr w16,[x16,#off]; cbz w16,+8 (0: the game's size); bfi xN,x16,#32,#32 (the pair's height)
+            emit(w)
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], why)
+    for bit, (site, reg, load, why) in enumerate((
+            (0xbdb584, 8, OUT, '1920x1080 beside NvInitializeGraphics (graphics init)'),
+            (0xd404f0, 9, OUT, '1920x1080 at +0xb68 (display object, setup)'),
+            (0xd404e0, 11, LAY, '1280x720 at +0xb70 (display object, setup)'),
+            (0xd40d50, 8, OUT, '1920x1080 at +0xb68 (display object, init)'),
+            (0xd40d5c, 8, LAY, '1280x720 at +0xb70 / +0xb78 (display object, init)'),
+            (0xd081fc, 8, OUT, '1920x1080 at +0x260 (object 0xd080c4)'),
+            (0xd08214, 8, LAY, '1280x720 at +0x268 (object 0xd080c4)'),
+            (0xedfe90, 25, OUT, '1920x1080 render target descriptor'),
+            (0xe64104, 10, OUT, '1920x1080 object default'),
+            (0x1eba890, 10, OUT, '1920x1080 object default'),
+            (0x6ee938, 10, LAY, '1280x720'),
+            (0x8c3fe8, 10, LAY, '1280x720'),
+            (0xd47068, 8, LAY, '1280x720'),
+            (0x2880b3c, 24, LAY, '1280x720'),
+            (0x2880e34, 8, LAY, '1280x720'))):
+        taller_bit(site, reg, bit, load, f'screen shape site {bit}: {why} → the host\'s height')
+    # The field of view, as in Breath of the Wild: sead::PerspectiveProjection (fovy +0xa0, sin / cos / tan of half of it +0xa4 / +0xa8 / +0xac, aspect +0xb0) takes a fovy of
+    # 2 atan(tan(fovy / 2) x k) for a view of the screen's ratio, so 16:9's sides stay in view with more above and below. The same code as Breath of the Wild's at setFovy_
+    # (1.4.3 main+0x27d53f8), the constructor (+0xc02694) and set() (+0xd4275c); the body is Breath of the Wild's (its patches.py fov_stub), tanf / atanf through 1.4.3's PLT
+    TANF, ATANF = 0x2bb7470, 0x2bb7480
+    FOV_BODY = (None, 0xbd405a01, 0x1e202028, 0x540003e0, 'ratio', 0x1e213842, 0x1e20c042, 0xbd406203, 0x1e232040, 0x5400032a,
+                0xb940a269, 0x9104020a, 0x5280080b, 0xb840454c, 0x6b09019f, 0x54000260, 0x7100056b, 0x54ffff81,
+                'half_to_s0', 'tanf', None, 0xbd405e01, 0x1e210800, 'atanf', 's0_to_half', 0x1e202800, 0xbd00a260,
+                None, 0xb940fe0b, 0x1200156c, 0x1100056b, 0xb900fe0b, 0x9104020a, 0xbc2c5940, 'half_to_s0')
+    def fov_stub(site, orig, aspect_word, half_to_s0, s0_to_half):
+        fs_site(site, orig)
+        start = here()
+        for w in FOV_BODY:
+            if w is None: emit(ADRP(16, here(), FS_STATE_OFF))
+            elif w == 'tanf': emit(B(here(), TANF) | 0x80000000)
+            elif w == 'atanf': emit(B(here(), ATANF) | 0x80000000)
+            else: emit({'ratio': aspect_word, 'half_to_s0': half_to_s0, 's0_to_half': s0_to_half}.get(w, w))
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], 'sead::PerspectiveProjection fovy widened for a view of the screen\'s ratio (more above and below, 16:9 sides), stored widened')
+    fov_stub(0x27d53f8, '0041201e', 0xbd40b262, 0x1e204100, 0x1e204008)   # setFovy_: ratio at [x19,#0xb0], half in s8
+    fov_stub(0xc02694, '0041201e', 0xbd40b262, 0x1e204100, 0x1e204008)    # constructor: aspect stored at +0xb0 before, half in s8
+    fov_stub(0xd4275c, '2041201e', 0x1e204102, 0x1e204120, 0x1e204009)    # set(): ratio still in s8, half in s9
+    # The HUD camera's matrix (doUpdateMatrix, 1.4.3 main+0x27d5438): Breath of the Wild's stub, the same leaf code
+    fs_site(0x27d5444, '0188552d')
+    start = here(); emit(0x2d558801); emit(ADRP(16, here(), FS_STATE_OFF))   # ldp s1,s2,[x0,#0xac] (tan, aspect)
+    for w in (0xbd405a10, 0x1e202208, 0x54000320, 0xbd407611, 0x1e313851, 0x1e20c231, 0xbd407a12, 0x1e322220, 0x5400026a,   # ratio on; aspect 16:9
+              0x2d534811, 0x1e2e1013, 0x1e332220, 0x540001e1, 0xbd407e13, 0x1e332240, 0x54000181,                          # near 1, far 10000
+              0x1e204202,                                                                                                  # aspect = ratio
+              0xb940a009, 0x9104020a, 0x5280080b, 0xb840454c, 0x6b09019f, 0x540000a0, 0x7100056b, 0x54ffff81,             # fovy widened already: done
+              0xbd405e11, 0x1e310821):                                                                                     # tan x k
+        emit(w)
+    emit(B(here(), 0x27d5448))
+    fs_put(0x27d5444, [B(0x27d5444, start)], 'PerspectiveProjection matrix: the HUD camera (16:9, near 1, far 10000) takes the screen\'s ratio and a widened vertical angle')
 
 # Placed by the functions they patch, on any build that keeps all six (checked on 1.4.3, 2026-11-09: rewritten byte-identical to the build entry it had until then,
 # FRAME_STEP of build 277178b7…, at main+0x2db174, +0x2daa20, +0x3e55e0, +0x1fbb50, +0xbe1304 and +0xd5c24)
