@@ -189,7 +189,7 @@ def screen_shape(ctx):
         fs_site(site, struct.pack('<I', orig).hex())
         start = here(); emit(orig)
         emit(ADRP(16, here(), FS_STATE_OFF))
-        emit(0xb9405610); emit(0x36000000 | bit << 19 | 5 << 5 | 16)   # ldr w16,[x16,#0x54]; tbz w16,#bit,back (+5)
+        emit(0xb9406610); emit(0x36000000 | bit << 19 | 5 << 5 | 16)   # ldr w16,[x16,#0x64] (DM_SCREEN_TRIAL: off by default, no effect found); tbz w16,#bit,back (+5)
         emit(ADRP(16, here(), FS_STATE_OFF))
         for w in (0xb9405210, 0x34000050, apply):   # ldr w16,[x16,#0x50] (the layout height's float bits); cbz w16,+8; apply
             emit(w)
@@ -205,7 +205,7 @@ def screen_shape(ctx):
     # layout height of 896 (the iPhone Duo's), the inverse height becomes 1/896 too (0x3a924925), as a shader dividing by the size would read it. x16 is free; no flags
     fs_site(0x7a6d80, struct.pack('<I', 0xf2e756c9).hex())   # movk x9,#0x3ab6,lsl #48
     start = here(); emit(0xf2e756c9); emit(ADRP(16, here(), FS_STATE_OFF))
-    for w in (0xb9405610, 0x36000000 | 15 << 19 | 8 << 5 | 16):   # ldr w16,[x16,#0x54]; tbz w16,#15,back (+8)
+    for w in (0xb9406610, 0x36000000 | 15 << 19 | 8 << 5 | 16):   # ldr w16,[x16,#0x64] (DM_SCREEN_TRIAL); tbz w16,#15,back (+8)
         emit(w)
     emit(ADRP(16, here(), FS_STATE_OFF))
     for w in (0xb9404e10, 0x510e0210, 0x35000090, 0x528924b0, 0x72a75250, 0xb3607e09):   # ldr w16,[x16,#0x4c]; sub w16,#896; cbnz back (+4); w16 = 1/896; bfi x9 high
@@ -317,7 +317,7 @@ def screen_shape(ctx):
             code.append(w)
         put(orig); put('adrp')
         for w in cnt(0x120): put(w)
-        put(0xb9405611); put(0x36f80011, 'back')                                       # ldr w17,[x16,#0x54]; tbz w17,#31,back (bit 31 of the site mask)
+        put(0xb9406611); put(0x36f80011, 'back')                                       # ldr w17,[x16,#0x64]; tbz w17,#31,back (DM_SCREEN_TRIAL bit 31: off by default; the 2D layer is the UI band below)
         put(0xb9406611); put(0x37000011, 'aspect')                                     # ldr w17,[x16,#0x64]; tbnz w17,#0 (DM_SCREEN_TRIAL bit 0): any near / far
         put(0xb9405a11); put(0x34000011, 'back')                                       # the screen's ratio (+0x58), 0: back
         put(0x1e260010); put(0x52a7f011); put(0x4b110210); put(0x35000010, 'back')      # near == 1.0
