@@ -333,6 +333,34 @@ def screen_shape(ctx):
         emit(w)
     emit(B(here(), site + 4))
     fs_put(site, [B(site, start)], 'screen shape: a 16:9 ortho projection (the 2D layer) drawn as a 16:9 band in the middle of the taller picture')
+    # The same in the inlined copies, which are what the game runs (0 calls of OrthoProjection::doUpdateMatrix in 1,200 frames, test build 9): the projection-matrix
+    # getters at 1.4.3 main+0x989bc, +0xc48e8, +0x64b230, +0x6dfdc4 build the ortho matrix in place (m00 at +0xc already stored); at the half-height multiply (fmul s0,s0,sM
+    # with s0 = top - bottom), a 16:9 one (m00 x (top - bottom) = 2 x 9/16 = 1.125, within about 0.004) has its height x k. s2 is dead there (written next), x16 / x17 free
+    def ortho_band(site, base, m):
+        orig = 0x1e200800 | m << 16   # fmul s0,s0,sM (x 0.5)
+        fs_site(site, struct.pack('<I', orig).hex())
+        code, fix = [], {}
+        def put(w, to=None):
+            if to: fix[len(code)] = (w, to)
+            code.append(w)
+        put('adrp')
+        for w in cnt(0x158): put(w)
+        put(0xb9405a11); put(0x34000011, 'orig')                                          # the screen's ratio, 0: the original
+        put(0xbd400c02 | base << 5); put(0x1e200842); put(0x1e260051)                     # s2 = m00 x (top - bottom); w17 = its bits
+        put(0x52900010); put(0x72a7f1f0); put(0x4b100231); put(0x53107e31); put(0x35000011, 'orig')   # (w17 - (bits(1.125) - 0x8000)) >> 16 != 0: not 16:9
+        put('adrp'); put(0xbd405e02); put(0x1e220800)                                     # s0 x= k
+        for w in cnt(0x124): put(w)
+        labels = {'orig': len(code)}
+        put(orig)
+        start = here()
+        for i, w in enumerate(code):
+            if w == 'adrp': emit(ADRP(16, here(), FS_STATE_OFF)); continue
+            if i in fix: w = fix[i][0] | (labels[fix[i][1]] - i) << 5
+            emit(w)
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], 'screen shape: an inlined 16:9 ortho projection (the 2D layer) drawn as a 16:9 band in the middle')
+    for site, base, m in ((0x98a18, 21, 4), (0xc4944, 19, 4), (0x64b280, 20, 7), (0x6dfe0c, 8, 4)):
+        ortho_band(site, base, m)
     # The HUD camera's matrix (doUpdateMatrix, 1.4.3 main+0x27d5438): Breath of the Wild's stub, the same leaf code
     fs_site(0x27d5444, '0188552d')
     start = here(); emit(0x2d558801); emit(ADRP(16, here(), FS_STATE_OFF))   # ldp s1,s2,[x0,#0xac] (tan, aspect)
