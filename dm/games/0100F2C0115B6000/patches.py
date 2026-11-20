@@ -251,6 +251,37 @@ def screen_shape(ctx):
     fov_stub(0x27d53f8, '0041201e', 0xbd40b262, 0x1e204100, 0x1e204008)   # setFovy_: ratio at [x19,#0xb0], half in s8
     fov_stub(0xc02694, '0041201e', 0xbd40b262, 0x1e204100, 0x1e204008)    # constructor: aspect stored at +0xb0 before, half in s8
     fov_stub(0xd4275c, '2041201e', 0x1e204102, 0x1e204120, 0x1e204009)    # set(): ratio still in s8, half in s9
+    # The HUD in the middle 16:9: the HUD camera (a 16:9 sead::PerspectiveProjection with near 1 and far 10000, sead's default) never goes through doUpdateMatrix below
+    # (0 matrices built in 3,000 frames on the phone, test build 6): its matrix is built by inlined copies of that code (1.4.3 main+0x990fc, +0xc475c, +0x64aeb4, +0x6dff00:
+    # ldp near / far at +0x98, then ldp tan, aspect at +0xac). There, such a projection takes the screen's ratio and tan x k (k = (16/9) / ratio, state +0x5c): the matrix of
+    # a 16:9 view in the middle of the taller picture, so the HUD keeps its shape (the bands above and below show the 3D world). Breath of the Wild's doUpdateMatrix stub,
+    # in place. Uses x16 / x17 only (free at the four, no flags written; s4 holds k, then the ratio). Counts at state +0x120 (logged as "projections built") and +0x124
+    def hud_band(site, base):
+        orig = 0x2d559003 | base << 5   # ldp s3,s4,[xB,#0xac]
+        fs_site(site, struct.pack('<I', orig).hex())
+        code, fix = [], {}
+        def put(w, to=None):
+            if to: fix[len(code)] = (w, to)
+            code.append(w)
+        put(orig); put('adrp')
+        for w in cnt(0x120): put(w)
+        put(0xb9405a11); put(0x34000011, 'back')                                       # the screen's ratio (+0x58), 0: back
+        put(0x1e260010); put(0x52a7f011); put(0x4b110210); put(0x35000010, 'back')      # near == 1.0
+        put(0x1e260030); put(0x52a8c391); put(0x72880011); put(0x4b110210); put(0x35000010, 'back')   # far == 10000.0
+        put(0x1e260091); put(0x52800010 | 0x4e39 << 5); put(0x72a00010 | 0x3fe2 << 5)  # w17 = aspect's bits; w16 = bits(16/9 - 0.0098)
+        put(0x4b100231); put(0x53127e31); put(0x35000011, 'back')                       # not near 16:9: back
+        put('adrp'); put(0xbd405e04); put(0x1e240863); put(0xbd405a04)                  # s4 = k; tan x= k; s4 = the screen's ratio
+        for w in cnt(0x124): put(w)
+        labels = {'back': len(code)}
+        start = here()
+        for i, w in enumerate(code):
+            if w == 'adrp': emit(ADRP(16, here(), FS_STATE_OFF)); continue
+            if i in fix: w = fix[i][0] | (labels[fix[i][1]] - i) << 5
+            emit(w)
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], 'screen shape: the HUD camera (16:9, near 1, far 10000) drawn as a 16:9 band in the middle of the taller picture')
+    for site, base in ((0x990fc, 21), (0xc475c, 19), (0x64aeb4, 20), (0x6dff00, 8)):
+        hud_band(site, base)
     # The HUD camera's matrix (doUpdateMatrix, 1.4.3 main+0x27d5438): Breath of the Wild's stub, the same leaf code
     fs_site(0x27d5444, '0188552d')
     start = here(); emit(0x2d558801); emit(ADRP(16, here(), FS_STATE_OFF))   # ldp s1,s2,[x0,#0xac] (tan, aspect)
