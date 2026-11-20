@@ -195,21 +195,44 @@ def screen_shape(ctx):
         emit(B(here(), site + 4))
         fs_put(site, [B(site, start)], 'scene camera aspect: the screen\'s ratio instead of 16:9 while the screen shape is on')
     cam_aspect(0x9a1bc); cam_aspect(0x218eeb8)
-    # Projections whose aspect is copied from a camera's parameters (still 16:9 after the builders above; iPhone Duo, second trial): the view update (1.4.3 main+0xd4fdc,
-    # after setFovy_; [params+0x218]) and two more (+0x628c7c, +0xb43468). Where the copied value is exactly 16:9 and the screen shape is on, the screen's ratio is stored
-    # instead (as bits, no FP register changes); any other aspect (shadow maps, cube maps, a viewport's own ratio) is stored as it is. x16 / x17 are free at the three
-    def copied_aspect(site, base):
-        orig = 0xbd00b000 | base << 5   # str s0,[xB,#0xb0]
+    # Every place that sets a projection's aspect (+0xb0, with its changed flag +8), Ocarina of Time's way (its patches.py wide_view): a value near 16:9 takes the screen's
+    # ratio (state +0x58) while the screen shape is on. Near, not exact: the game cameras' own parameter is 1.7778, not 1920/1080 to the bit (Ocarina's finding; an exact test
+    # changed nothing on the phone, second trial), so the test is (bits - bits(16/9 - 0.0098)) >> 18 == 0 (16/9 - 0.0098 to about + 0.02). Each site counts its passes at state
+    # +0x130 + 4 x index, the widened ones at +0x124 and keeps the last other value at +0x128: the host logs them every 300 frames while +0x110 is set ("wide view camera",
+    # hle_nvn.c), so the log tells which sites the game runs. Kinds: 'store' str sN,[xB,#0xb0]; 'const' str wN,[xB,#0xb0] of the 16:9 constant; 'arg' fmov s8,s3 at the
+    # entry of set() and the constructor (the aspect argument, which their fovy stubs compare). x16 / x17 and the flags' users: checked free at each (no flag is written)
+    def cnt(off): return (0xb9400211 | (off // 4) << 10, 0x11000631, 0xb9000211 | (off // 4) << 10)   # ldr w17,[x16,#off]; add w17,w17,#1; str w17,[x16,#off]
+    def aspect_site(k, site, kind, n, b, why):
+        orig = {'store': 0xbd00b000 | b << 5 | n, 'const': 0xb900b000 | b << 5 | n, 'arg': 0x1e204068}[kind]
+        apply = 0x1e270228 if kind == 'arg' else 0xb900b011 | b << 5   # fmov s8,w17 / str w17,[xB,#0xb0]
         fs_site(site, struct.pack('<I', orig).hex())
-        start = here()
-        for w in (0x1e260010, 0x5291c731, 0x72a7fc71, 0x6b11021f, 0x540000c1):   # fmov w16,s0; w17 = 16/9 (0x3fe38e39); cmp w16,w17; b.ne the original (+6)
-            emit(w)
-        emit(ADRP(16, here(), FS_STATE_OFF))
-        for w in (0xb9405a10, 0x34000070, 0xb900b010 | base << 5):   # ldr w16,[x16,#0x58]; cbz w16,the original (+3); str w16,[xB,#0xb0] (the screen's ratio)
-            emit(w)
-        emit(B(here(), site + 4)); emit(orig); emit(B(here(), site + 4))
-        fs_put(site, [B(site, start)], 'projection aspect copied from camera parameters: 16:9 becomes the screen\'s ratio while the screen shape is on')
-    copied_aspect(0xd4fdc, 24); copied_aspect(0x628c7c, 20); copied_aspect(0xb43468, 23)
+        start = here(); emit(ADRP(16, here(), FS_STATE_OFF))
+        for w in cnt(0x130 + 4 * k): emit(w)
+        if kind == 'const':
+            for w in (0xb9405a11, 0x34000011 | 6 << 5, apply) + cnt(0x124): emit(w)   # ldr w17,[x16,#0x58]; cbz w17,the original (+6); the ratio; widened += 1
+            emit(B(here(), site + 4)); emit(orig); emit(B(here(), site + 4))
+        else:
+            for w in (0x1e260011 | n << 5, 0x52800010 | 0x4e39 << 5, 0x72a00010 | 0x3fe2 << 5,   # w17 = the value's bits; w16 = bits(16/9 - 0.0098)
+                      0x4b100231, 0x53127e31, 0x35000011 | 9 << 5):                          # (w17 - w16) >> 18 != 0: not 16:9 (+9: other)
+                emit(w)
+            emit(ADRP(16, here(), FS_STATE_OFF))
+            for w in (0xb9405a11, 0x34000011 | 9 << 5, apply) + cnt(0x124): emit(w)   # the ratio, 0: the original (+9); apply; widened += 1
+            emit(B(here(), site + 4))
+            emit(ADRP(16, here(), FS_STATE_OFF)); emit(0x1e260011 | n << 5); emit(0xb9012a11)   # other: +0x128 = the value
+            emit(orig); emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], f'screen shape: a 16:9 projection aspect set here takes the screen\'s ratio (site {k}: {why})')
+    for k, (site, kind, n, b, why) in enumerate((
+            (0x628c7c, 'store', 0, 20, 'the game camera\'s own parameter +0x140'),
+            (0xd4fdc, 'store', 0, 24, 'view update, from camera parameters +0x218'),
+            (0xb43468, 'store', 0, 23, 'from parameters +0x68'),
+            (0x4e9830, 'store', 0, 24, 'a viewport\'s ratio'),
+            (0x1ff04f8, 'store', 0, 8, 'a viewport\'s ratio'),
+            (0x253fbb4, 'store', 0, 8, 'a viewport\'s ratio'),
+            (0xd42748, 'arg', 3, 0, 'sead::PerspectiveProjection::set'),
+            (0xc02618, 'arg', 3, 0, 'sead::PerspectiveProjection constructor'),
+            (0x89ddac, 'const', 8, 21, 'a 16:9 constant with a 1280x720 viewport'),
+            (0x22dc2c0, 'const', 8, 23, 'a 16:9 constant with a 1280x720 viewport'))):
+        aspect_site(k, site, kind, n, b, why)
     TANF, ATANF = 0x2bb7470, 0x2bb7480
     FOV_BODY = (None, 0xbd405a01, 0x1e202028, 0x540003e0, 'ratio', 0x1e213842, 0x1e20c042, 0xbd406203, 0x1e232040, 0x5400032a,
                 0xb940a269, 0x9104020a, 0x5280080b, 0xb840454c, 0x6b09019f, 0x54000260, 0x7100056b, 0x54ffff81,
