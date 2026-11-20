@@ -135,6 +135,7 @@ def stub(ctx, step, read1, read2, fade, swap, view):
     emit(B(here(), view + 0x160))
     fs_put(view + 0x15c, [B(view + 0x15c, start)], 'dynamic resolution only at render scale 1.0')
 
+
 def matched_frame_step(ctx):
     """Any build whose six functions match: all or nothing, as the readers without the step (or the step without them) run the game at the wrong speed (the locator prints a
     red line for the one not found)"""
@@ -142,6 +143,149 @@ def matched_frame_step(ctx):
     parts = [o.get(k) for k in ('game step reader 1', 'game step reader 2', 'menu fade', 'swapchain argument', 'view render size')]
     if None in parts: return
     stub(ctx, ctx.base, *parts)
+    if ctx.base == 0x2db174: screen_shape(ctx)   # 1.4.3's own addresses (its frame-step function there)
+
+def screen_shape(ctx):
+    """Screen shape (DM_SCREEN_ASPECT, Breath of the Wild 1.9.0's patches.py ported to 1.4.3): a screen taller than 16:9 (the iPhone Duo's, about 1.43:1) gets a picture of its
+    own shape. State +0x48 u32 output height, +0x4c u32 layout height, +0x50 float layout height, +0x54 u32 site mask (DM_SCREEN_ASPECT_SITES), +0x58 float screen ratio
+    (0 = off), +0x5c float k = (16/9) / ratio, +0x60 float tolerance, +0xfc / +0x100 the last 64 widened fovys (loader.c). Unlike Breath of the Wild's, the 2D layer is not
+    laid out for the taller screen: it is drawn as a 16:9 band in the middle (the 3D world fills the whole picture behind it), which keeps every widget's shape without moving
+    them. Three parts: the output size sites (the swapchain and the 3D views take the taller height), the cameras' aspect (near-16:9 aspects take the screen's ratio and the
+    fovy is widened, Breath of the Wild's and Ocarina of Time's methods) and the 2D layer's matrices (ui_band). Checked on the Mac at 1920x1344 (the title screen's emblem and
+    the button guide's icons round) and on an iPhone Duo"""
+    here, emit, fs_site, fs_put, FS_STATE_OFF = ctx.here, ctx.emit, ctx.site, ctx.put, ctx.state
+    # The game's 1920x1080 and 1280x720 pairs (movk xN,#1080 or #720,lsl #32): each takes the host's height while its bit of state +0x54 is set and the host set one.
+    # x16 is free at every site (checked: written or unused before the next call or return; 1.4.3 main+0x8c81f4 reads it and is left out)
+    OUT, LAY = 0xb9404a10, 0xb9404e10   # ldr w16,[x16,#0x48] / #0x4c
+    def taller_bit(site, reg, bit, load, why):
+        orig = 0xf2c00000 | (0x438 if load == OUT else 0x2d0) << 5 | reg
+        fs_site(site, struct.pack('<I', orig).hex())
+        start = here(); emit(orig)
+        emit(ADRP(16, here(), FS_STATE_OFF))
+        emit(0xb9405610); emit(0x36000000 | bit << 19 | 5 << 5 | 16)   # ldr w16,[x16,#0x54]; tbz w16,#bit,back (+5)
+        emit(ADRP(16, here(), FS_STATE_OFF))
+        for w in (load, 0x34000050, 0xb3607e00 | reg):   # ldr w16,[x16,#off]; cbz w16,+8 (0: the game's size); bfi xN,x16,#32,#32 (the pair's height)
+            emit(w)
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], why)
+    for bit, (site, reg, load, why) in enumerate((
+            (0xbdb584, 8, OUT, '1920x1080 beside NvInitializeGraphics (graphics init)'),
+            (0xd404f0, 9, OUT, '1920x1080 at +0xb68 (display object, setup)'),
+            (0xd404e0, 11, LAY, '1280x720 at +0xb70 (display object, setup)'),
+            (0xd40d50, 8, OUT, '1920x1080 at +0xb68 (display object, init)'),
+            (0xd40d5c, 8, LAY, '1280x720 at +0xb70 / +0xb78 (display object, init)'),
+            (0xd081fc, 8, OUT, '1920x1080 at +0x260 (object 0xd080c4)'),
+            (0xd08214, 8, LAY, '1280x720 at +0x268 (object 0xd080c4)'),
+            (0xedfe90, 25, OUT, '1920x1080 render target descriptor'),
+            (0xe64104, 10, OUT, '1920x1080 object default'),
+            (0x1eba890, 10, OUT, '1920x1080 object default'),
+            (0x6ee938, 10, LAY, '1280x720'),
+            (0x8c3fe8, 10, LAY, '1280x720'),
+            (0xd47068, 8, LAY, '1280x720'),
+            (0x2880b3c, 24, LAY, '1280x720'),
+            (0x2880e34, 8, LAY, '1280x720'))):
+        taller_bit(site, reg, bit, load, f'screen shape site {bit}: {why} → the host\'s height')
+    # The field of view, as in Breath of the Wild: sead::PerspectiveProjection (fovy +0xa0, sin / cos / tan of half of it +0xa4 / +0xa8 / +0xac, aspect +0xb0) takes a fovy of
+    # 2 atan(tan(fovy / 2) x k) for a view of the screen's ratio, so 16:9's sides stay in view with more above and below. The same code as Breath of the Wild's at setFovy_
+    # (1.4.3 main+0x27d53f8), the constructor (+0xc02694) and set() (+0xd4275c); the body is Breath of the Wild's (its patches.py fov_stub), tanf / atanf through 1.4.3's PLT
+    # The scene cameras' aspect: unlike Breath of the Wild, whose projections took the view's ratio, two camera builders (1.4.3 main+0x9a1bc, +0x218eeb8) load a 16:9
+    # constant ([main+0x2d02534]) as the aspect for the sead::PerspectiveProjection constructor and set(), so the taller view was drawn with a 16:9 projection (stretched
+    # vertically; iPhone Duo, first trial). They take the screen's ratio (state +0x58) instead while it is on; the fovy stubs below then widen them. x16 is free up to the bl
+    def cam_aspect(site):
+        fs_site(site, '033545bd')   # ldr s3,[x8,#0x534]
+        start = here(); emit(0xbd453503); emit(ADRP(16, here(), FS_STATE_OFF))
+        for w in (0xb9405a10, 0x34000050, 0x1e270203):   # ldr w16,[x16,#0x58]; cbz w16,+8 (off); fmov s3,w16
+            emit(w)
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], 'scene camera aspect: the screen\'s ratio instead of 16:9 while the screen shape is on')
+    cam_aspect(0x9a1bc); cam_aspect(0x218eeb8)
+    # Every place that sets a projection's aspect (+0xb0, with its changed flag +8), Ocarina of Time's way (its patches.py wide_view): a value near 16:9 takes the screen's
+    # ratio (state +0x58) while the screen shape is on. Near, not exact: the game cameras' own parameter is 1.7778, not 1920/1080 to the bit (Ocarina's finding; an exact test
+    # changed nothing on the phone, second trial), so the test is (bits - bits(16/9 - 0.0098)) >> 18 == 0 (16/9 - 0.0098 to about + 0.02). Each site counts its passes at state
+    # +0x130 + 4 x index, the widened ones at +0x124 and keeps the last other value at +0x128: the host logs them every 300 frames while +0x110 is set ("wide view camera",
+    # hle_nvn.c), so the log tells which sites the game runs. Kinds: 'store' str sN,[xB,#0xb0]; 'const' str wN,[xB,#0xb0] of the 16:9 constant; 'arg' fmov s8,s3 at the
+    # entry of set() and the constructor (the aspect argument, which their fovy stubs compare). x16 / x17 and the flags' users: checked free at each (no flag is written)
+    def cnt(off): return (0xb9400211 | (off // 4) << 10, 0x11000631, 0xb9000211 | (off // 4) << 10)   # ldr w17,[x16,#off]; add w17,w17,#1; str w17,[x16,#off]
+    def aspect_site(k, site, kind, n, b, why):
+        orig = {'store': 0xbd00b000 | b << 5 | n, 'const': 0xb900b000 | b << 5 | n, 'arg': 0x1e204068}[kind]
+        apply = 0x1e270228 if kind == 'arg' else 0xb900b011 | b << 5   # fmov s8,w17 / str w17,[xB,#0xb0]
+        fs_site(site, struct.pack('<I', orig).hex())
+        start = here(); emit(ADRP(16, here(), FS_STATE_OFF))
+        for w in cnt(0x130 + 4 * k): emit(w)
+        if kind == 'const':
+            for w in (0xb9405a11, 0x34000011 | 6 << 5, apply) + cnt(0x124): emit(w)   # ldr w17,[x16,#0x58]; cbz w17,the original (+6); the ratio; widened += 1
+            emit(B(here(), site + 4)); emit(orig); emit(B(here(), site + 4))
+        else:
+            for w in (0x1e260011 | n << 5, 0x52800010 | 0x4e39 << 5, 0x72a00010 | 0x3fe2 << 5,   # w17 = the value's bits; w16 = bits(16/9 - 0.0098)
+                      0x4b100231, 0x53127e31, 0x35000011 | 9 << 5):                          # (w17 - w16) >> 18 != 0: not 16:9 (+9: other)
+                emit(w)
+            emit(ADRP(16, here(), FS_STATE_OFF))
+            for w in (0xb9405a11, 0x34000011 | 9 << 5, apply) + cnt(0x124): emit(w)   # the ratio, 0: the original (+9); apply; widened += 1
+            emit(B(here(), site + 4))
+            emit(ADRP(16, here(), FS_STATE_OFF)); emit(0x1e260011 | n << 5); emit(0xb9012a11)   # other: +0x128 = the value
+            emit(orig); emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], f'screen shape: a 16:9 projection aspect set here takes the screen\'s ratio (site {k}: {why})')
+    for k, (site, kind, n, b, why) in enumerate((
+            (0x628c7c, 'store', 0, 20, 'the game camera\'s own parameter +0x140'),
+            (0xd4fdc, 'store', 0, 24, 'view update, from camera parameters +0x218'),
+            (0xb43468, 'store', 0, 23, 'from parameters +0x68'),
+            (0x4e9830, 'store', 0, 24, 'a viewport\'s ratio'),
+            (0x1ff04f8, 'store', 0, 8, 'a viewport\'s ratio'),
+            (0x253fbb4, 'store', 0, 8, 'a viewport\'s ratio'),
+            (0xd42748, 'arg', 3, 0, 'sead::PerspectiveProjection::set'),
+            (0xc02618, 'arg', 3, 0, 'sead::PerspectiveProjection constructor'),
+            (0x89ddac, 'const', 8, 21, 'a 16:9 constant with a 1280x720 viewport'),
+            (0x22dc2c0, 'const', 8, 23, 'a 16:9 constant with a 1280x720 viewport'))):
+        aspect_site(k, site, kind, n, b, why)
+    TANF, ATANF = 0x2bb7470, 0x2bb7480
+    FOV_BODY = (None, 0xbd405a01, 0x1e202028, 0x540003e0, 'ratio', 0x1e213842, 0x1e20c042, 0xbd406203, 0x1e232040, 0x5400032a,
+                0xb940a269, 0x9104020a, 0x5280080b, 0xb840454c, 0x6b09019f, 0x54000260, 0x7100056b, 0x54ffff81,
+                'half_to_s0', 'tanf', None, 0xbd405e01, 0x1e210800, 'atanf', 's0_to_half', 0x1e202800, 0xbd00a260,
+                None, 0xb940fe0b, 0x1200156c, 0x1100056b, 0xb900fe0b, 0x9104020a, 0xbc2c5940, 'half_to_s0')
+    def fov_stub(site, orig, aspect_word, half_to_s0, s0_to_half):
+        fs_site(site, orig)
+        start = here()
+        for w in FOV_BODY:
+            if w is None: emit(ADRP(16, here(), FS_STATE_OFF))
+            elif w == 'tanf': emit(B(here(), TANF) | 0x80000000)
+            elif w == 'atanf': emit(B(here(), ATANF) | 0x80000000)
+            else: emit({'ratio': aspect_word, 'half_to_s0': half_to_s0, 's0_to_half': s0_to_half}.get(w, w))
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], 'sead::PerspectiveProjection fovy widened for a view of the screen\'s ratio (more above and below, 16:9 sides), stored widened')
+    fov_stub(0x27d53f8, '0041201e', 0xbd40b262, 0x1e204100, 0x1e204008)   # setFovy_: ratio at [x19,#0xb0], half in s8
+    fov_stub(0xc02694, '0041201e', 0xbd40b262, 0x1e204100, 0x1e204008)    # constructor: aspect stored at +0xb0 before, half in s8
+    fov_stub(0xd4275c, '2041201e', 0x1e204102, 0x1e204120, 0x1e204009)    # set(): ratio still in s8, half in s9
+    # The 2D layer's own matrix: the UI renderer (1.4.3 main+0x10d29f0) copies a stored 4x4 (its object + 0x10) into each draw's uniform block through the leaf at
+    # main+0x10cc93c (ldp q0..q3; stp q0, q1, [x1]; stp q2, q3, [x1, #0x20]). |m11| / m00: the text is drawn into small targets and composited with the flipped matrix (m11 < 0). Found with DM_PROBE_WATCH on the title screen's uniform block (Mac, heap + 0x49a16410): an ortho
+    # of 1920x1080 (m00 2/1920, m11 2/1080), drawn over the whole taller picture. In the copy, a matrix whose m11 / m00 is 16:9 has row 1 divided by k: the 2D layer is drawn
+    # as a 16:9 band in the middle, nothing stretched; the stored matrix stays. Assembled with clang (v4-v7, x16, x17 free in the leaf). Counts at state +0x124
+    UI_BAND = (0x5e040404, 0x5e0c0425, 0x1e2418a6, 0x1e20c0c6, 0x1e2600d1, 0x5289c730, 0x72a7fc50, 0x4b100231, 0x53127e31, 0x35000171, 'adrp',
+               0xb9405a11, 0x34000111, 0xbd405e06, 0x1e2e1007, 0x1e2618e6, 0x4f869021, 0xb9412611, 0x11000631, 0xb9012611, 0xad000420, 'back')
+    # The text is drawn into small targets and composited with the flipped matrix times the quad's own (main+0x10b7be0 multiplies them and stores the product at
+    # +0x10b7cb0): at main+0x10b7c4c, before the multiply, v0-v3 hold the flipped 16:9 ortho; its row 1 scaled there carries through the product (v4-v7 are written after)
+    def ui_band(site, orig, why):
+        fs_site(site, struct.pack('<I', orig).hex())
+        start = here()
+        for w in UI_BAND:
+            if w == 'adrp': emit(ADRP(16, here(), FS_STATE_OFF))
+            elif w == 'back': emit(B(here(), site + 4))
+            elif w == 0xad000420: emit(orig)   # the original instruction
+            else: emit(w)
+        fs_put(site, [B(site, start)], why)
+    ui_band(0x10cc944, 0xad000420, 'screen shape: the 2D layer\'s 16:9 ortho matrix copied as a 16:9 band in the middle of the taller picture')
+    ui_band(0x10b7c4c, 0xf9401069, 'screen shape: the text composites\' 16:9 ortho (before the quad\'s matrix) as a 16:9 band in the middle')
+    # The HUD camera's matrix (doUpdateMatrix, 1.4.3 main+0x27d5438): Breath of the Wild's stub, the same leaf code
+    fs_site(0x27d5444, '0188552d')
+    start = here(); emit(0x2d558801); emit(ADRP(16, here(), FS_STATE_OFF))   # ldp s1,s2,[x0,#0xac] (tan, aspect)
+    for w in (0xb9412209, 0x11000529, 0xb9012209,   # matrices built += 1 (state +0x120, logged as "projections built"; w9 is free in this leaf)
+              0xbd405a10, 0x1e202208, 0x54000320, 0xbd407611, 0x1e313851, 0x1e20c231, 0xbd407a12, 0x1e322220, 0x5400026a,   # ratio on; aspect 16:9
+              0x2d534811, 0x1e2e1013, 0x1e332220, 0x540001e1, 0xbd407e13, 0x1e332240, 0x54000181,                          # near 1, far 10000
+              0x1e204202,                                                                                                  # aspect = ratio
+              0xb940a009, 0x9104020a, 0x5280080b, 0xb840454c, 0x6b09019f, 0x540000a0, 0x7100056b, 0x54ffff81,             # fovy widened already: done
+              0xbd405e11, 0x1e310821):                                                                                     # tan x k
+        emit(w)
+    emit(B(here(), 0x27d5448))
+    fs_put(0x27d5444, [B(0x27d5444, start)], 'PerspectiveProjection matrix: the HUD camera (16:9, near 1, far 10000) takes the screen\'s ratio and a widened vertical angle')
 
 # Placed by the functions they patch, on any build that keeps all six (checked on 1.4.3, 2026-11-09: rewritten byte-identical to the build entry it had until then,
 # FRAME_STEP of build 277178b7…, at main+0x2db174, +0x2daa20, +0x3e55e0, +0x1fbb50, +0xbe1304 and +0xd5c24)

@@ -12,8 +12,19 @@ Update 1.4.3 (v720896) over the base game, SDK 20.5.22. Nintendo EPD's engine (s
 | `tex_flush_upload on` | `game.tsv` | streamed textures are written by the CPU into pool memory in GPU layout and published with `nvnMemoryPoolFlushMappedRange` |
 | `tex_dirty_upload on` | `game.tsv` | textures filled from the CPU with no flush at all (the magenta cave, the unlit stone blocks) |
 | `pad_layout full` | `game.tsv` | the 3D gamepad layout: the right stick turns the camera |
+| Screen shape, `screen_aspect on` | `patches.py` `screen_shape` (1.4.3), [`game.tsv`](game.tsv) | the launcher's *Picture shape* for a screen taller than 16:9 (the iPhone Duo's 1.43:1); see [Screen shape](#screen-shape) |
 
 Render conditions, which the host evaluates for every game ([Conditional rendering evaluated at replay](../../../docs/reference/rendering.md#conditional-rendering-evaluated-at-replay); until 2026-11-12 the profile key `render_cond`): the 3D scene was black: the game skips clears with conditional rendering.
+
+## Screen shape
+
+A screen taller than 16:9 (the iPhone Duo's, about 1.43:1; `DM_SCREEN_ASPECT`, the launcher's *Picture shape*, offered by `screen_aspect on`) gets a 3D picture of its own shape, with 16:9's sides in view and more above and below; the HUD, menus and text stay 16:9 in a band across the middle, as on a 16:9 screen, with the 3D world behind them. 1.4.3 only (the stubs are at its addresses, placed with the frame step). Three parts in `patches.py` `screen_shape`:
+
+- **Output size.** The 1920x1080 / 1280x720 pairs the display setup builds take the host's height (`DM_SCREEN_ASPECT_SITES` masks them one by one): the swapchain is 1920x1344 and the scene renders 1600x1120 (the view size function scales the screen's size).
+- **The cameras' aspect.** Unlike Breath of the Wild's projections, these do not take the view's ratio: the game cameras' own aspect parameter (`main+0x628c7c`, camera +0x140, 1.7778, not 1920/1080 to the bit) keeps 16:9, so the world was stretched vertically. Every aspect set near 16:9 (Ocarina of Time's method, its patches.py `wide_view`: ten sites, each counted at state +0x130) takes the screen's ratio, and sead::PerspectiveProjection's fovy is widened at setFovy_, the constructor and set() (Breath of the Wild's stubs, the same code here). Site 0 does it: about three sets a frame.
+- **The 2D layer.** It goes through neither projection class: the UI renderer stores one ortho of 1920x1080 (m00 2/1920, m11 2/1080, m22 -2/300) and copies it into each draw's uniform block (`main+0x10cc93c`), and text is drawn into small targets and composited with that matrix flipped (m11 < 0) times the quad's own (`main+0x10b7be0`). Both copies of a 16:9 ortho (|m11| / m00 = 16/9) have row 1 divided by k = (16/9) / ratio: a 16:9 band in the middle. Found on the Mac (`--platform mac`, headless at `DM_SCREEN_ASPECT=1.43`): `DM_NVN_CBDUMP` on the title screen gave the matrix, `DM_PROBE_WATCH=heap+<offset>` on its uniform block the store. Full-screen menu backgrounds are in the band too (black above and below).
+
+Checked at 1920x1344 on the Mac (the title's emblem round; the button guide's icons 25x25 px, 25x31 before) and on an iPhone Duo. Not done: the HUD's edge widgets at the screen's edges (Breath of the Wild's `duo_anchor.c`), and the culling of the widened view's top and bottom (Breath of the Wild's camera fovy getters have no counterpart found here).
 
 ## Frame rate
 
