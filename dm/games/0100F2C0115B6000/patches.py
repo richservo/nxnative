@@ -201,6 +201,17 @@ def screen_shape(ctx):
             (0x22dc2b0, 8, '(1280.0, 720.0) viewport of a 16:9 camera'), (0x2880b40, 25, '(1280.0, 720.0) with 1280x720 (an object)'),
             (0x2b43554, 8, '(1280.0, 720.0) twice in an object')), start=15):
         float_bit(site, 0xf2e88680 | reg, 0xb3607e00 | reg, bit, f'screen shape site {bit}: {why} → the layout height')
+    # Trial: site 15's constant also holds the inverse size (1/1280, 1/720) right after it (main+0x7a6d80 builds 1/720 in the high half of x9): with bit 15 set and a
+    # layout height of 896 (the iPhone Duo's), the inverse height becomes 1/896 too (0x3a924925), as a shader dividing by the size would read it. x16 is free; no flags
+    fs_site(0x7a6d80, struct.pack('<I', 0xf2e756c9).hex())   # movk x9,#0x3ab6,lsl #48
+    start = here(); emit(0xf2e756c9); emit(ADRP(16, here(), FS_STATE_OFF))
+    for w in (0xb9405610, 0x36000000 | 15 << 19 | 8 << 5 | 16):   # ldr w16,[x16,#0x54]; tbz w16,#15,back (+8)
+        emit(w)
+    emit(ADRP(16, here(), FS_STATE_OFF))
+    for w in (0xb9404e10, 0x510e0210, 0x35000090, 0x528924b0, 0x72a75250, 0xb3607e09):   # ldr w16,[x16,#0x4c]; sub w16,#896; cbnz back (+4); w16 = 1/896; bfi x9 high
+        emit(w)
+    emit(B(here(), 0x7a6d84))
+    fs_put(0x7a6d80, [B(0x7a6d80, start)], 'screen shape site 15 (trial): the inverse layout height 1/896 beside the size')
     for bit, (site, reg) in ((22, (0x89cac, 8)), (23, (0x4ea988, 8)), (24, (0x684c48, 8)), (25, (0x778378, 9)), (26, (0x89f1dc, 8)), (27, (0x18fdcb0, 8)),
                              (28, (0x1df2ce8, 9)), (29, (0x22dc2f0, 8)), (30, (0x23c2c00, 8)), (30, (0x23ceb08, 8)), (30, (0x28ff988, 8)), (30, (0x2b2a1fc, 8))):
         float_bit(site, 0x52a88680 | reg, 0x2a1003e0 | reg, bit, f'screen shape site {bit}: 720.0 → the layout height')
