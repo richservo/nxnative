@@ -292,6 +292,22 @@ def wide_hud(ctx):
         elif i == 32: w = B(here(), site + 4)
         emit(w)
     fs_put(site, [B(site, start)], 'wide view: movies in the middle 16:9 (Ivan0xFF\'s site, via NX2navi)')
+    # The HUD at the taller picture's edges (a squarer picture, the iPhone Duo's): where the UI tree's update computes a node's transform from its parent's (main+0x152cd40..,
+    # the node x19, its parent x0, both with their transform at +0x28, the translation x / y at +0x4c / +0x50; the last step fadd v3,v6,v3 at main+0x152ce4c, only on the
+    # path with a parent), a node from y 600 to the grid's edge 1080 (3840x2160) under a centred container (|parent y| < 120) moves out by the band's margin (1080 / squeeze
+    # - 1080, 270 on the Duo; squeeze at state +0x180). Its children are computed from it afterwards, so a group moves whole (the hearts with the item row under them, the
+    # item box with its labels, a map with its icons) and is never moved twice (its children's parent is off centre). Donkey Kong Bananza's rule (duo_anchor.c: 300 of 540,
+    # the centred parent within 60) in this grid; found by DM_PROBE on the draw of a heart's translation. Assembled with clang; after the site only v0..v3 are live up to
+    # the stores, x8 / x16 / x17 are reloaded, v4..v7 / v16 free
+    GROUP = (1310971075, 2415919120, 3175186948, 506335237, 505749632, 1409286986, 505421960, 1409286925, 1577845862, 505462983, 1386775240, 505872645, 505749728, 1409286731, 1386778856, 505872645, 505749728, 1409286604, 3175108615, 505463015, 1386765832, 505872656, 506470624, 1409286410, 505682087, 505755879, 505422024, 1409286218, 505495783, 505882822, 1846281411, 3573751839)
+    site = 0x152ce4c
+    fs_site(site, (0x4e23d4c3).to_bytes(4, 'little').hex())   # fadd v3.4s, v6.4s, v3.4s
+    start = here()
+    for i, w in enumerate(GROUP):
+        if i == 1: w = ADRP(16, here(), FS_STATE_OFF)
+        elif i == len(GROUP) - 1: w = B(here(), site + 4)
+        emit(w)
+    fs_put(site, [B(site, start)], 'wide view on a squarer picture: HUD groups at the band\'s top and bottom moved out to the picture\'s edges, whole')
 
 # A full model heap (DM_HEAP_RETRY, on by default). The game's OptimizeChangeBank thread rebuilds a model's material block (main+0x4366e0) with memory from small
 # heaps of the model's own ("Model/....bfres", tens of KB), children of a large one, and checks none of these allocations: two CPU buffers made with the heap's
